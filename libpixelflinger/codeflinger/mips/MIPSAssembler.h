@@ -25,7 +25,7 @@
 #include <utils/KeyedVector.h>
 
 #include "tinyutils/smartpointer.h"
-#include "codeflinger/ARMAssemblerInterface.h"
+#include "codeflinger/arm/ARMAssemblerInterface.h"
 #include "codeflinger/CodeCache.h"
 
 namespace android {

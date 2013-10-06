@@ -1,4 +1,4 @@
-/* libs/pixelflinger/codeflinger/ARMAssembler.h
+/* libs/pixelflinger/codeflinger/arm/ARMAssemblerProxy.h
 **
 ** Copyright 2006, The Android Open Source Project
 **
@@ -15,78 +15,37 @@
 ** limitations under the License.
 */
 
-#ifndef ANDROID_ARMASSEMBLER_H
-#define ANDROID_ARMASSEMBLER_H
+
+#ifndef ANDROID_ARMASSEMBLER_PROXY_H
+#define ANDROID_ARMASSEMBLER_PROXY_H
 
 #include <stdint.h>
 #include <sys/types.h>
 
-#include "tinyutils/Vector.h"
-#include "tinyutils/KeyedVector.h"
-#include "tinyutils/smartpointer.h"
-
-#include "tinyutils/smartpointer.h"
-#include "codeflinger/ARMAssemblerInterface.h"
-#include "codeflinger/CodeCache.h"
+#include "codeflinger/arm/ARMAssemblerInterface.h"
 
 namespace android {
 
 // ----------------------------------------------------------------------------
 
-class ARMAssembler : public ARMAssemblerInterface
+class ARMAssemblerProxy : public ARMAssemblerInterface
 {
 public:
-                ARMAssembler(const sp<Assembly>& assembly);
-    virtual     ~ARMAssembler();
+    // ARMAssemblerProxy take ownership of the target
 
-    uint32_t*   base() const;
-    uint32_t*   pc() const;
+                ARMAssemblerProxy();
+                ARMAssemblerProxy(ARMAssemblerInterface* target);
+    virtual     ~ARMAssemblerProxy();
 
-
-    void        disassemble(const char* name);
-
-    // ------------------------------------------------------------------------
-    // ARMAssemblerInterface...
-    // ------------------------------------------------------------------------
+    void setTarget(ARMAssemblerInterface* target);
 
     virtual void    reset();
-
     virtual int     generate(const char* name);
-    virtual int     getCodegenArch();
+    virtual void    disassemble(const char* name);
 
     virtual void    prolog();
     virtual void    epilog(uint32_t touched);
     virtual void    comment(const char* string);
-
-
-    // -----------------------------------------------------------------------
-    // shifters and addressing modes
-    // -----------------------------------------------------------------------
-
-    // shifters...
-    virtual bool        isValidImmediate(uint32_t immed);
-    virtual int         buildImmediate(uint32_t i, uint32_t& rot, uint32_t& imm);
-
-    virtual uint32_t    imm(uint32_t immediate);
-    virtual uint32_t    reg_imm(int Rm, int type, uint32_t shift);
-    virtual uint32_t    reg_rrx(int Rm);
-    virtual uint32_t    reg_reg(int Rm, int type, int Rs);
-
-    // addressing modes...
-    // LDR(B)/STR(B)/PLD
-    // (immediate and Rm can be negative, which indicates U=0)
-    virtual uint32_t    immed12_pre(int32_t immed12, int W=0);
-    virtual uint32_t    immed12_post(int32_t immed12);
-    virtual uint32_t    reg_scale_pre(int Rm, int type=0, uint32_t shift=0, int W=0);
-    virtual uint32_t    reg_scale_post(int Rm, int type=0, uint32_t shift=0);
-
-    // LDRH/LDRSB/LDRSH/STRH
-    // (immediate and Rm can be negative, which indicates U=0)
-    virtual uint32_t    immed8_pre(int32_t immed8, int W=0);
-    virtual uint32_t    immed8_post(int32_t immed8);
-    virtual uint32_t    reg_pre(int Rm, int W=0);
-    virtual uint32_t    reg_post(int Rm);
-
 
     virtual void    dataProcessing(int opcode, int cc, int s,
                                 int Rd, int Rn,
@@ -111,26 +70,24 @@ public:
     virtual void B(int cc, const char* label);
     virtual void BL(int cc, const char* label);
 
-    virtual uint32_t* pcForLabel(const char* label);
+    uint32_t* pcForLabel(const char* label);
 
     virtual void LDR (int cc, int Rd,
-                int Rn, uint32_t offset = __immed12_pre(0));
+                int Rn, uint32_t offset = immed12_pre(0));
     virtual void LDRB(int cc, int Rd,
-                int Rn, uint32_t offset = __immed12_pre(0));
+                int Rn, uint32_t offset = immed12_pre(0));
     virtual void STR (int cc, int Rd,
-                int Rn, uint32_t offset = __immed12_pre(0));
+                int Rn, uint32_t offset = immed12_pre(0));
     virtual void STRB(int cc, int Rd,
-                int Rn, uint32_t offset = __immed12_pre(0));
+                int Rn, uint32_t offset = immed12_pre(0));
     virtual void LDRH (int cc, int Rd,
-                int Rn, uint32_t offset = __immed8_pre(0));
+                int Rn, uint32_t offset = immed8_pre(0));
     virtual void LDRSB(int cc, int Rd, 
-                int Rn, uint32_t offset = __immed8_pre(0));
+                int Rn, uint32_t offset = immed8_pre(0));
     virtual void LDRSH(int cc, int Rd,
-                int Rn, uint32_t offset = __immed8_pre(0));
+                int Rn, uint32_t offset = immed8_pre(0));
     virtual void STRH (int cc, int Rd,
-                int Rn, uint32_t offset = __immed8_pre(0));
-
-
+                int Rn, uint32_t offset = immed8_pre(0));
     virtual void LDM(int cc, int dir,
                 int Rn, int W, uint32_t reg_list);
     virtual void STM(int cc, int dir,
@@ -156,36 +113,14 @@ public:
                 int RdHi, int RdLo, int Rs, int Rm);
     virtual void SMLAW(int cc, int y,
                 int Rd, int Rm, int Rs, int Rn);
+
     virtual void UXTB16(int cc, int Rd, int Rm, int rotate);
     virtual void UBFX(int cc, int Rd, int Rn, int lsb, int width);
 
 private:
-                ARMAssembler(const ARMAssembler& rhs);
-                ARMAssembler& operator = (const ARMAssembler& rhs);
-
-    sp<Assembly>    mAssembly;
-    uint32_t*       mBase;
-    uint32_t*       mPC;
-    uint32_t*       mPrologPC;
-    int64_t         mDuration;
-#if defined(WITH_LIB_HARDWARE)
-    bool            mQemuTracing;
-#endif
-    
-    struct branch_target_t {
-        inline branch_target_t() : label(0), pc(0) { }
-        inline branch_target_t(const char* l, uint32_t* p)
-            : label(l), pc(p) { }
-        const char* label;
-        uint32_t*   pc;
-    };
-    
-    Vector<branch_target_t>                 mBranchTargets;
-    KeyedVector< const char*, uint32_t* >   mLabels;
-    KeyedVector< uint32_t*, const char* >   mLabelsInverseMapping;
-    KeyedVector< uint32_t*, const char* >   mComments;
+    ARMAssemblerInterface*  mTarget;
 };
 
 }; // namespace android
 
-#endif //ANDROID_ARMASSEMBLER_H
+#endif //ANDROID_ARMASSEMBLER_PROXY_H

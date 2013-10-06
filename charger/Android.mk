@@ -28,6 +28,10 @@ LOCAL_STATIC_LIBRARIES := libminui libpixelflinger_static libpng
 ifeq ($(strip $(BOARD_CHARGER_ENABLE_SUSPEND)),true)
 LOCAL_STATIC_LIBRARIES += libsuspend
 endif
+#libpixelflinger_static for x86 is using encoder under dalvik/vm/compiler/codegen/x86/libenc
+ifeq ($(TARGET_ARCH),x86)
+LOCAL_STATIC_LIBRARIES += libenc
+endif
 LOCAL_STATIC_LIBRARIES += libz libstdc++ libcutils libm libc
 
 ifneq ($(BOARD_BATTERY_DEVICE_NAME),)

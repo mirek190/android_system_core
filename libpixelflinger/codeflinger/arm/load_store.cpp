@@ -1,4 +1,4 @@
-/* libs/pixelflinger/codeflinger/load_store.cpp
+/* libs/pixelflinger/codeflinger/arm/load_store.cpp
 **
 ** Copyright 2006, The Android Open Source Project
 **
@@ -18,7 +18,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <cutils/log.h>
-#include "codeflinger/GGLAssembler.h"
+#include "codeflinger/arm/GGLAssembler.h"
 
 #ifdef __ARM_ARCH__
 #include <machine/cpu-features.h>
@@ -110,11 +110,7 @@ void GGLAssembler::extract(integer_t& d, int s, int h, int l, int bits)
 {
     const int maskLen = h-l;
 
-#ifdef __mips__
-    assert(maskLen<=11);
-#else
     assert(maskLen<=8);
-#endif
     assert(h);
     
 #if __ARM_ARCH__ >= 7

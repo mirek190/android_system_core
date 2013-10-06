@@ -1,4 +1,4 @@
-/* libs/pixelflinger/codeflinger/GGLAssembler.cpp
+/* libs/pixelflinger/codeflinger/arm/GGLAssembler.cpp
 **
 ** Copyright 2006, The Android Open Source Project
 **
@@ -24,15 +24,14 @@
 #include <sys/types.h>
 #include <cutils/log.h>
 
-#include "codeflinger/GGLAssembler.h"
+#include "codeflinger/arm/GGLAssembler.h"
 
 namespace android {
 
 // ----------------------------------------------------------------------------
 
 GGLAssembler::GGLAssembler(ARMAssemblerInterface* target)
-    : ARMAssemblerProxy(target),
-      RegisterAllocator(ARMAssemblerProxy::getCodegenArch()), mOptLevel(7)
+    : ARMAssemblerProxy(target), RegisterAllocator(), mOptLevel(7)
 {
 }
 
@@ -231,9 +230,7 @@ int GGLAssembler::scanline_core(const needs_t& needs, context_t const* c)
 
             // texel generation
             build_textures(parts, regs);
-            if (registerFile().status())
-                return registerFile().status();
-        }
+        }        
 
         if ((blending & (FACTOR_DST|BLEND_DST)) || 
                 (mMasking && !mAllMasked) ||
@@ -893,15 +890,6 @@ void GGLAssembler::build_and_immediate(int d, int s, uint32_t mask, int bits)
         return;
     }
     
-    if (getCodegenArch() == CODEGEN_ARCH_MIPS) {
-        // MIPS can do 16-bit imm in 1 instr, 32-bit in 3 instr
-        // the below ' while (mask)' code is buggy on mips
-        // since mips returns true on isValidImmediate()
-        // then we get multiple AND instr (positive logic)
-        AND( AL, 0, d, s, imm(mask) );
-        return;
-    }
-
     int negative_logic = !isValidImmediate(mask);
     if (negative_logic) {
         mask = ~mask & size;
@@ -1014,15 +1002,6 @@ void GGLAssembler::base_offset(
 // cheezy register allocator...
 // ----------------------------------------------------------------------------
 
-// Modified to support MIPS processors, in a very simple way. We retain the
-// (Arm) limit of 16 total registers, but shift the mapping of those registers
-// from 0-15, to 2-17. Register 0 on Mips cannot be used as GP registers, and
-// register 1 has a traditional use as a temp).
-
-RegisterAllocator::RegisterAllocator(int arch) : mRegs(arch)
-{
-}
-
 void RegisterAllocator::reset()
 {
     mRegs.reset();
@@ -1050,22 +1029,16 @@ RegisterAllocator::RegisterFile& RegisterAllocator::registerFile()
 
 // ----------------------------------------------------------------------------
 
-RegisterAllocator::RegisterFile::RegisterFile(int codegen_arch)
-    : mRegs(0), mTouched(0), mStatus(0), mArch(codegen_arch), mRegisterOffset(0)
+RegisterAllocator::RegisterFile::RegisterFile()
+    : mRegs(0), mTouched(0), mStatus(0)
 {
-    if (mArch == ARMAssemblerInterface::CODEGEN_ARCH_MIPS) {
-        mRegisterOffset = 2;    // ARM has regs 0..15, MIPS offset to 2..17
-    }
     reserve(ARMAssemblerInterface::SP);
     reserve(ARMAssemblerInterface::PC);
 }
 
-RegisterAllocator::RegisterFile::RegisterFile(const RegisterFile& rhs, int codegen_arch)
-    : mRegs(rhs.mRegs), mTouched(rhs.mTouched), mArch(codegen_arch), mRegisterOffset(0)
+RegisterAllocator::RegisterFile::RegisterFile(const RegisterFile& rhs)
+    : mRegs(rhs.mRegs), mTouched(rhs.mTouched)
 {
-    if (mArch == ARMAssemblerInterface::CODEGEN_ARCH_MIPS) {
-        mRegisterOffset = 2;    // ARM has regs 0..15, MIPS offset to 2..17
-    }
 }
 
 RegisterAllocator::RegisterFile::~RegisterFile()
@@ -1084,12 +1057,8 @@ void RegisterAllocator::RegisterFile::reset()
     reserve(ARMAssemblerInterface::PC);
 }
 
-// RegisterFile::reserve() take a register parameter in the
-// range 0-15 (Arm compatible), but on a Mips processor, will
-// return the actual allocated register in the range 2-17.
 int RegisterAllocator::RegisterFile::reserve(int reg)
 {
-    reg += mRegisterOffset;
     LOG_ALWAYS_FATAL_IF(isUsed(reg),
                         "reserving register %d, but already in use",
                         reg);
@@ -1098,7 +1067,6 @@ int RegisterAllocator::RegisterFile::reserve(int reg)
     return reg;
 }
 
-// This interface uses regMask in range 2-17 on MIPS, no translation.
 void RegisterAllocator::RegisterFile::reserveSeveral(uint32_t regMask)
 {
     mRegs |= regMask;
@@ -1107,7 +1075,7 @@ void RegisterAllocator::RegisterFile::reserveSeveral(uint32_t regMask)
 
 int RegisterAllocator::RegisterFile::isUsed(int reg) const
 {
-    LOG_ALWAYS_FATAL_IF(reg>=16+(int)mRegisterOffset, "invalid register %d", reg);
+    LOG_ALWAYS_FATAL_IF(reg>=16, "invalid register %d", reg);
     return mRegs & (1<<reg);
 }
 
@@ -1118,10 +1086,10 @@ int RegisterAllocator::RegisterFile::obtain()
                                      6,  7, 8, 9,
                                     10, 11 };
     const int nbreg = sizeof(priorityList);
-    int i, r, reg;
+    int i, r;
     for (i=0 ; i<nbreg ; i++) {
         r = priorityList[i];
-        if (!isUsed(r + mRegisterOffset)) {
+        if (!isUsed(r)) {
             break;
         }
     }
@@ -1134,20 +1102,18 @@ int RegisterAllocator::RegisterFile::obtain()
         // the code will never be run anyway.
         return ARMAssemblerInterface::SP; 
     }
-    reg = reserve(r);  // Param in Arm range 0-15, returns range 2-17 on Mips.
-    return reg;
+    reserve(r);
+    return r;
 }
 
 bool RegisterAllocator::RegisterFile::hasFreeRegs() const
 {
-    uint32_t regs = mRegs >> mRegisterOffset;   // MIPS fix.
-    return ((regs & 0xFFFF) == 0xFFFF) ? false : true;
+    return ((mRegs & 0xFFFF) == 0xFFFF) ? false : true;
 }
 
 int RegisterAllocator::RegisterFile::countFreeRegs() const
 {
-    uint32_t regs = mRegs >> mRegisterOffset;   // MIPS fix.
-    int f = ~regs & 0xFFFF;
+    int f = ~mRegs & 0xFFFF;
     // now count number of 1
    f = (f & 0x5555) + ((f>>1) & 0x5555);
    f = (f & 0x3333) + ((f>>2) & 0x3333);
@@ -1158,24 +1124,18 @@ int RegisterAllocator::RegisterFile::countFreeRegs() const
 
 void RegisterAllocator::RegisterFile::recycle(int reg)
 {
-    // commented out, since common failure of running out of regs
-    // triggers this assertion. Since the code is not execectued
-    // in that case, it does not matter. No reason to FATAL err.
-    // LOG_FATAL_IF(!isUsed(reg),
-    //         "recycling unallocated register %d",
-    //         reg);
+    LOG_FATAL_IF(!isUsed(reg),
+            "recycling unallocated register %d",
+            reg);
     mRegs &= ~(1<<reg);
 }
 
 void RegisterAllocator::RegisterFile::recycleSeveral(uint32_t regMask)
 {
-    // commented out, since common failure of running out of regs
-    // triggers this assertion. Since the code is not execectued
-    // in that case, it does not matter. No reason to FATAL err.
-    // LOG_FATAL_IF((mRegs & regMask)!=regMask,
-    //         "recycling unallocated registers "
-    //         "(recycle=%08x, allocated=%08x, unallocated=%08x)",
-    //         regMask, mRegs, mRegs&regMask);
+    LOG_FATAL_IF((mRegs & regMask)!=regMask,
+            "recycling unallocated registers "
+            "(recycle=%08x, allocated=%08x, unallocated=%08x)",
+            regMask, mRegs, mRegs&regMask);
     mRegs &= ~regMask;
 }
 
