@@ -18,7 +18,7 @@
  * Backtracing functions for x86.
  */
 
-#ifndef __BIONIC__
+#if !defined(__BIONIC__)
 // glibc has its own renaming of the Linux kernel's structures.
 #define _GNU_SOURCE // For REG_EBP, REG_ESP, and REG_EIP.
 #include <ucontext.h>
