@@ -22,6 +22,7 @@
 #include <string.h>
 #include <stddef.h>
 #include <ctype.h>
+#include <sys/stat.h>
 
 #include "init.h"
 #include "parser.h"
@@ -56,6 +57,8 @@ void add_environment(const char *name, const char *value);
 #define SECTION 0x01
 #define COMMAND 0x02
 #define OPTION  0x04
+#define ACTION_STRING_DEVICE_ADDED "device-added-"
+#define ACTION_STRING_DEVICE_REMOVED "device-removed-"
 
 #include "keywords.h"
 
@@ -81,6 +84,9 @@ struct {
 int lookup_keyword(const char *s)
 {
     switch (*s++) {
+    case 'a':
+        if (!strcmp(s, "llowrtprio")) return K_allowrtprio;
+        break;
     case 'c':
     if (!strcmp(s, "opy")) return K_copy;
         if (!strcmp(s, "apability")) return K_capability;
@@ -158,6 +164,7 @@ int lookup_keyword(const char *s)
         break;
     case 't':
         if (!strcmp(s, "rigger")) return K_trigger;
+        if (!strcmp(s, "erm")) return K_term;
         break;
     case 'u':
         if (!strcmp(s, "ser")) return K_user;
@@ -570,6 +577,24 @@ void action_for_each_trigger(const char *trigger,
         }
     }
 }
+void queue_device_triggers(const char *name, int is_add)
+{
+    struct listnode *node;
+    struct action *act;
+    const char *trigger_names[] = { "device-removed-", "device-added-" };
+
+    list_for_each(node, &action_list) {
+        act = node_to_item(node, struct action, alist);
+        if (!strncmp(act->name, trigger_names[is_add],
+                     strlen(trigger_names[is_add]))) {
+            const char *devname = act->name + strlen(trigger_names[is_add]);
+
+            if (!strcmp(devname, name)) {
+                action_add_queue_tail(act);
+            }
+        }
+    }
+}
 
 void queue_property_triggers(const char *name, const char *value)
 {
@@ -591,7 +616,7 @@ void queue_property_triggers(const char *name, const char *value)
     }
 }
 
-void queue_all_property_triggers()
+void queue_all_property_triggers(void)
 {
     struct listnode *node;
     struct action *act;
@@ -619,6 +644,51 @@ void queue_all_property_triggers()
                         action_add_queue_tail(act);
                     }
                 }
+            }
+        }
+    }
+}
+
+void queue_device_added_removed_triggers(const char *name, bool dev_added)
+{
+    struct listnode *node;
+    struct action *act;
+    char *action_str;
+
+    INFO("queue_device_added_removed_triggers:%s", name);
+    action_str = dev_added ? ACTION_STRING_DEVICE_ADDED : ACTION_STRING_DEVICE_REMOVED;
+    list_for_each(node, &action_list) {
+        act = node_to_item(node, struct action, alist);
+        if (!strncmp(act->name, action_str, strlen(action_str))) {
+            const char *test = act->name + strlen(action_str);
+            int len1 = strlen(test);
+            int len2 = strlen(name);
+            int len = len1 > len2 ? len2 : len1;
+            /* Last few bytes of PCI and USB enumerated devices are variable
+             based on the order of probe. So the idea is that in the init
+             script you can add a fixed part only and still get a match.
+             So comparing only with smaller of device name or trigger name.*/
+            if (!strncmp(name, test, len)) {
+                action_add_queue_tail(act);
+            }
+        }
+    }
+}
+
+void queue_all_device_triggers()
+{
+    struct listnode *node;
+    struct action *act;
+    int r;
+
+    INFO("queue_all_device_triggers");
+    list_for_each(node, &action_list) {
+        act = node_to_item(node, struct action, alist);
+        if (!strncmp(act->name, ACTION_STRING_DEVICE_ADDED, strlen(ACTION_STRING_DEVICE_ADDED))) {
+            const char *test = act->name + strlen(ACTION_STRING_DEVICE_ADDED);
+            INFO("test:%s", test);
+            if ((r = access(test, R_OK)) == 0) {
+               action_add_queue_tail(act);
             }
         }
     }
@@ -710,6 +780,7 @@ static void parse_line_service(struct parse_state *state, int nargs, char **args
     }
 
     svc->ioprio_class = IoSchedClass_NONE;
+    svc->allowrtprio = 0;
 
     kw = lookup_keyword(args[0]);
     switch (kw) {
@@ -780,6 +851,9 @@ static void parse_line_service(struct parse_state *state, int nargs, char **args
                 }
             }
         }
+        break;
+    case K_allowrtprio:
+        svc->allowrtprio = 1;
         break;
     case K_oneshot:
         svc->flags |= SVC_ONESHOT;
@@ -901,6 +975,7 @@ static void parse_line_action(struct parse_state* state, int nargs, char **args)
     struct action *act = state->context;
     int (*func)(int nargs, char **args);
     int kw, n;
+    int alloc_size = 0;
 
     if (nargs == 0) {
         return;
@@ -918,7 +993,14 @@ static void parse_line_action(struct parse_state* state, int nargs, char **args)
             n > 2 ? "arguments" : "argument");
         return;
     }
-    cmd = malloc(sizeof(*cmd) + sizeof(char*) * nargs);
+    alloc_size = sizeof(*cmd) + sizeof(char*) * (nargs + 1);
+    cmd = malloc(alloc_size);
+    if (!cmd) {
+        parse_error(state, "malloc failed\n");
+        return;
+    }
+
+    memset((char *)cmd, 0, alloc_size);
     cmd->func = kw_func(kw);
     cmd->nargs = nargs;
     memcpy(cmd->args, args, sizeof(char*) * nargs);

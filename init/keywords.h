@@ -28,6 +28,7 @@ int do_setrlimit(int nargs, char **args);
 int do_setsebool(int nargs, char **args);
 int do_start(int nargs, char **args);
 int do_stop(int nargs, char **args);
+int do_term(int nargs, char **args);
 int do_trigger(int nargs, char **args);
 int do_symlink(int nargs, char **args);
 int do_sysclktz(int nargs, char **args);
@@ -86,6 +87,7 @@ enum {
     KEYWORD(socket,      OPTION,  0, 0)
     KEYWORD(start,       COMMAND, 1, do_start)
     KEYWORD(stop,        COMMAND, 1, do_stop)
+    KEYWORD(term,        COMMAND, 1, do_term)
     KEYWORD(trigger,     COMMAND, 1, do_trigger)
     KEYWORD(symlink,     COMMAND, 1, do_symlink)
     KEYWORD(sysclktz,    COMMAND, 1, do_sysclktz)
@@ -98,6 +100,7 @@ enum {
     KEYWORD(loglevel,    COMMAND, 1, do_loglevel)
     KEYWORD(load_persist_props,    COMMAND, 0, do_load_persist_props)
     KEYWORD(ioprio,      OPTION,  0, 0)
+    KEYWORD(allowrtprio, OPTION,  0, 0)
 #ifdef __MAKE_KEYWORD_ENUM__
     KEYWORD_COUNT,
 };

@@ -385,10 +385,10 @@ int do_mkdir(int nargs, char **args)
         mode = strtoul(args[2], 0, 8);
     }
 
-    ret = make_dir(args[1], mode);
+    ret = mkdir(args[1], mode);
     /* chmod in case the directory already exists */
     if (ret == -1 && errno == EEXIST) {
-        ret = _chmod(args[1], mode);
+        ret = chmod(args[1], mode);
     }
     if (ret == -1) {
         return -errno;
@@ -402,13 +402,13 @@ int do_mkdir(int nargs, char **args)
             gid = decode_uid(args[4]);
         }
 
-        if (_chown(args[1], uid, gid) < 0) {
+        if (chown(args[1], uid, gid) < 0) {
             return -errno;
         }
 
         /* chown may have cleared S_ISUID and S_ISGID, chmod again */
         if (mode & (S_ISUID | S_ISGID)) {
-            ret = _chmod(args[1], mode);
+            ret = chmod(args[1], mode);
             if (ret == -1) {
                 return -errno;
             }
@@ -488,6 +488,24 @@ int do_mount(int nargs, char **args)
         }
 
         goto exit_success;
+    } else if (!strncmp(source, "mmc@", 4)) {
+        sprintf(tmp, "/dev/block/%s", source + 4);
+
+        if (wait) {
+            wait_for_file(tmp, COMMAND_RETRY_TIMEOUT);
+            /*
+             * Seeing system doesn't guarantee we see userdata
+             * For now, we don't wait in the mount script, so
+             *    need to make sure userdata show up here
+             */
+            wait_for_file("/dev/block/userdata", COMMAND_RETRY_TIMEOUT);
+        }
+        if (mount(tmp, target, system, flags, options) < 0) {
+            ERROR("mount device (%s) to point (%s) failed", tmp, target);
+            return -1;
+        }
+
+        return 0;
     } else if (!strncmp(source, "loop@", 5)) {
         int mode, loop, fd;
         struct loop_info info;
@@ -529,12 +547,58 @@ int do_mount(int nargs, char **args)
         ERROR("out of loopback devices");
         return -1;
     } else {
+        int ret;
+
         if (wait)
             wait_for_file(source, COMMAND_RETRY_TIMEOUT);
-        if (mount(source, target, system, flags, options) < 0) {
-            return -1;
+
+        ret = mount(source, target, system, flags, options);
+        if (ret < 0 && errno != EBUSY) {
+            /* If this fails, it may be an encrypted filesystem
+             * or it could just be wiped or has been mounted.
+             * We should ingore the mounted case because it has
+             * be handled correctly. If wiped, that will be
+             * handled later in the boot process.
+             * We only support encrypting /data.  Check
+             * if we're trying to mount it, and if so,
+             * assume it's encrypted, mount a tmpfs instead.
+             * Then save the orig mount parms in properties
+             * for vold to query when it mounts the real
+             * encrypted /data.
+             */
+            if (!strcmp(target, DATA_MNT_POINT) && !partition_wiped(source)) {
+                const char *tmpfs_options;
+
+                tmpfs_options = property_get("ro.crypto.tmpfs_options");
+
+                if (mount("tmpfs", target, "tmpfs", MS_NOATIME | MS_NOSUID | MS_NODEV,
+                    tmpfs_options) < 0) {
+                    return -1;
+                }
+
+                /* Set the property that triggers the framework to do a minimal
+                 * startup and ask the user for a password
+                 */
+                property_set("ro.crypto.state", "encrypted");
+                property_set("vold.decrypt", "1");
+            } else {
+                return -1;
+            }
         }
 
+        if (!strcmp(target, DATA_MNT_POINT)) {
+            char fs_flags[32];
+
+            /* Save the original mount options */
+            property_set("ro.crypto.fs_type", system);
+            property_set("ro.crypto.fs_real_blkdev", source);
+            property_set("ro.crypto.fs_mnt_point", target);
+            if (options) {
+                property_set("ro.crypto.fs_options", options);
+            }
+            snprintf(fs_flags, sizeof(fs_flags), "0x%8.8x", flags);
+            property_set("ro.crypto.fs_flags", fs_flags);
+        }
     }
 
 exit_success:
@@ -549,6 +613,8 @@ int do_mount_all(int nargs, char **args)
     int child_ret = -1;
     int status;
     const char *prop;
+    char prop_val[PROP_VALUE_MAX];
+
 
     if (nargs != 2) {
         return -1;
@@ -572,7 +638,12 @@ int do_mount_all(int nargs, char **args)
     } else if (pid == 0) {
         /* child, call fs_mgr_mount_all() */
         klog_set_level(6);  /* So we can see what fs_mgr_mount_all() does */
-        child_ret = fs_mgr_mount_all(args[1]);
+        ret = expand_props(prop_val, args[1], sizeof(prop_val));
+        if (ret) {
+            ERROR("cannot expand '%s' while assigning to '%s'\n", args[1], prop_val);
+            return -1;
+        }
+        child_ret = fs_mgr_mount_all(prop_val);
         if (child_ret == -1) {
             ERROR("fs_mgr_mount_all returned an error\n");
         }
@@ -673,6 +744,17 @@ int do_stop(int nargs, char **args)
     }
     return 0;
 }
+
+int do_term(int nargs, char **args)
+{
+    struct service *svc;
+    svc = service_find_by_name(args[1]);
+    if (svc) {
+        service_term(svc);
+    }
+    return 0;
+}
+
 
 int do_restart(int nargs, char **args)
 {
@@ -800,10 +882,10 @@ out:
 int do_chown(int nargs, char **args) {
     /* GID is optional. */
     if (nargs == 3) {
-        if (_chown(args[2], decode_uid(args[1]), -1) < 0)
+        if (lchown(args[2], decode_uid(args[1]), -1) < 0)
             return -errno;
     } else if (nargs == 4) {
-        if (_chown(args[3], decode_uid(args[1]), decode_uid(args[2])) < 0)
+        if (lchown(args[3], decode_uid(args[1]), decode_uid(args[2])) < 0)
             return -errno;
     } else if (nargs == 5) {
         int ret = 0;
@@ -836,7 +918,7 @@ int do_chown(int nargs, char **args) {
                 ret = -errno;
                 break;
             default:
-                if (_chown(ftsent->fts_accpath, uid, gid) < 0) {
+                if (chown(ftsent->fts_accpath, uid, gid) < 0) {
                     ret = -errno;
                     fts_set(fts, ftsent, FTS_SKIP);
                 }
@@ -867,7 +949,7 @@ static mode_t get_mode(const char *s) {
 
 int do_chmod(int nargs, char **args) {
     mode_t mode = get_mode(args[1]);
-    if (_chmod(args[2], mode) < 0) {
+    if (chmod(args[2], mode) < 0) {
         return -errno;
     }
     return 0;

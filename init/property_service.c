@@ -66,7 +66,15 @@ struct {
     unsigned int uid;
     unsigned int gid;
 } property_perms[] = {
+    { "net.caif0.",       AID_RADIO,    0 },
+    { "net.usb0.",        AID_RADIO,    0 },
+    { "net.usb1.",        AID_RADIO,    0 },
+    { "net.qmi0.",        AID_RADIO,    0 },
+    { "net.qmi1.",        AID_RADIO,    0 },
+    { "net.qmi2.",        AID_RADIO,    0 },
     { "net.rmnet",        AID_RADIO,    0 },
+    { "net.rmnet0.",      AID_RADIO,    0 },
+    { "net.gannet0.",     AID_RADIO,    0 },
     { "net.gprs.",        AID_RADIO,    0 },
     { "net.ppp",          AID_RADIO,    0 },
     { "net.qmi",          AID_RADIO,    0 },
@@ -76,6 +84,12 @@ struct {
     { "gsm.",             AID_RADIO,    0 },
     { "persist.radio",    AID_RADIO,    0 },
     { "net.dns",          AID_RADIO,    0 },
+    { "net.dns",          AID_DHCP,     0 },
+    { "net.dns",          AID_VPN,      0 },
+    { "net.vpnclient",    AID_VPN,      0 },
+    { "net.dnschange",    AID_VPN,      0 },
+    { "serialno",         AID_RADIO,    0 },
+    { "radio.",           AID_RADIO,    0 },
     { "sys.usb.config",   AID_RADIO,    0 },
     { "net.",             AID_SYSTEM,   0 },
     { "dev.",             AID_SYSTEM,   0 },
@@ -86,18 +100,36 @@ struct {
     { "service.",         AID_RADIO,    0 },
     { "wlan.",            AID_SYSTEM,   0 },
     { "bluetooth.",       AID_BLUETOOTH,   0 },
+    { "hostapd.",         AID_WIFI,     0 },
     { "dhcp.",            AID_SYSTEM,   0 },
     { "dhcp.",            AID_DHCP,     0 },
+    { "debug.nfc.",       AID_NFC,      0 }, // rjones1, 6/25/2012, IKMAIN-46254
     { "debug.",           AID_SYSTEM,   0 },
     { "debug.",           AID_SHELL,    0 },
-    { "log.",             AID_SHELL,    0 },
+    { "log.",             AID_SHELL,    AID_LOG },
     { "service.adb.root", AID_SHELL,    0 },
     { "service.adb.tcp.port", AID_SHELL,    0 },
     { "persist.mmac.", AID_SYSTEM, 0 },
     { "persist.sys.",     AID_SYSTEM,   0 },
-    { "persist.service.", AID_SYSTEM,   0 },
-    { "persist.service.", AID_RADIO,    0 },
+    { "persist.service.", AID_SYSTEM,   AID_RADIO },
     { "persist.security.", AID_SYSTEM,   0 },
+    { "persist.log.",     AID_SHELL,    AID_LOG },
+    { "persist.tcmd.", AID_MOT_TCMD,   0 },
+    { "tcmd.",            AID_MOT_TCMD, AID_MOT_WHISPER },
+    { "persist.mot.proximity.", AID_RADIO, 0},
+    { "mot.backup_restore.",AID_MOT_TCMD, 0},
+    { "mot.",             AID_MOT_TCMD, 0 },
+    { "sys.",             AID_MOT_OSH,  0 },
+    { "hw.",              AID_MOT_OSH,  0 },
+    { "cdma.nbpcd.supported", AID_RADIO, AID_RADIO },
+    { "hw.",              AID_MOT_WHISPER, 0 },
+    { "lte.default.protocol",      AID_RADIO,    0 },
+    { "lte.ignoredns",             AID_RADIO,    0 },
+    { "vzw.inactivetimer",         AID_RADIO,    0 },
+    { "android.telephony.apn-restore", AID_RADIO,    0 },
+    { "hw.",              AID_MEDIA,   0 },
+    { "persist.ril.event.report", AID_RADIO, 0 },
+    { "persist.atvc.",    AID_MOT_ATVC,  0 },
     { "persist.service.bdroid.", AID_BLUETOOTH,   0 },
     { "selinux."         , AID_SYSTEM,   0 },
     { "net.pdp",          AID_RADIO,    AID_RADIO },
@@ -121,7 +153,20 @@ struct {
     unsigned int gid;
 } control_perms[] = {
     { "dumpstate",AID_SHELL, AID_LOG },
+    { "bug2go-bugreport", AID_LOG, AID_LOG},
     { "ril-daemon",AID_RADIO, AID_RADIO },
+    { "hciattach", AID_MOT_TCMD, AID_MOT_TCMD },
+    { "bluetoothd",AID_MOT_TCMD, AID_MOT_TCMD },
+    { "bt_start", AID_MOT_TCMD, AID_MOT_TCMD },
+    { "bt_stop", AID_MOT_TCMD, AID_MOT_TCMD },
+    { "whisperd", AID_MOT_TCMD, AID_MOT_TCMD },
+    { "gadget-lte-modem", AID_RADIO, AID_RADIO },
+    { "gadget-qbp-modem", AID_RADIO, AID_RADIO },
+    { "gadget-qbp-diag", AID_RADIO, AID_RADIO },
+    { "ftmipcd", AID_RADIO, AID_RADIO },
+    { "mdm_usb_suspend", AID_RADIO, AID_RADIO },
+    { "pcsc",AID_WIFI, AID_WIFI },  /* Allow wpa_supplicant to start the pcsc-lite daemon used for EAP-SIM/AKA auth */
+    { "uim",AID_BLUETOOTH, AID_BLUETOOTH },
 #ifdef CONTROL_PERMS_APPEND
 CONTROL_PERMS_APPEND
 #endif
@@ -144,7 +189,7 @@ static int init_workspace(workspace *w, size_t size)
         /* dev is a tmpfs that we can use to carve a shared workspace
          * out of, so let's do that...
          */
-    fd = open("/dev/__properties__", O_RDWR | O_CREAT, 0600);
+    fd = open("/dev/__properties__", O_RDWR | O_CREAT | O_NOFOLLOW, 0600);
     if (fd < 0)
         return -1;
 
@@ -157,7 +202,7 @@ static int init_workspace(workspace *w, size_t size)
 
     close(fd);
 
-    fd = open("/dev/__properties__", O_RDONLY);
+    fd = open("/dev/__properties__", O_RDONLY | O_NOFOLLOW);
     if (fd < 0)
         return -1;
 
@@ -173,12 +218,20 @@ out:
     return -1;
 }
 
-/* (8 header words + 372 toc words) = 1520 bytes */
-/* 1536 bytes header and toc + 372 prop_infos @ 128 bytes = 49152 bytes */
-
-#define PA_COUNT_MAX  372
-#define PA_INFO_START 1536
-#define PA_SIZE       49152
+/* PA_COUNT_MAX formula:
+ * PA_COUNT_MAX * 128 + PA_COUNT_MAX * 4 + 32 + 4 <= Allocation memory
+ * Where:
+ *     Allocate memory = 17 * 4096 = 69632 bytes
+ * PA_COUNT_MAX = 527
+ */
+#define PA_COUNT_MAX   527
+/* PA_INFO_START = 8 header words(32 bytes)
+ *               + 527 toc words(2108 bytes)
+ *               + 4 bytes
+ *               = 2144 bytes
+ */
+#define PA_INFO_START  2144
+#define PA_SIZE        69632
 
 static workspace pa_workspace;
 static prop_info *pa_info_array;
@@ -292,6 +345,13 @@ static int check_control_perms(const char *name, unsigned int uid, unsigned int 
             }
         }
     }
+
+    if (strncmp(name, "uim:", 4) == 0) {
+        if ((uid == AID_BLUETOOTH) ||
+            (gid == AID_BLUETOOTH)) {
+                return 1;
+        }
+    }
     return 0;
 }
 
@@ -353,6 +413,7 @@ static void write_persistent_property(const char *name, const char *value)
     write(fd, value, strlen(value));
     close(fd);
 
+    snprintf(path, sizeof(path), "%s/%s", PERSISTENT_PROPERTY_DIR, name);
     if (rename(tempPath, path)) {
         unlink(tempPath);
         ERROR("Unable to rename persistent property file %s to %s\n", tempPath, path);
@@ -364,8 +425,8 @@ int property_set(const char *name, const char *value)
     prop_area *pa;
     prop_info *pi;
 
-    int namelen = strlen(name);
-    int valuelen = strlen(value);
+    size_t namelen = strlen(name);
+    size_t valuelen = strlen(value);
 
     if(namelen >= PROP_NAME_MAX) return -1;
     if(valuelen >= PROP_VALUE_MAX) return -1;
@@ -444,13 +505,13 @@ void handle_property_set_fd()
     /* Check socket options here */
     if (getsockopt(s, SOL_SOCKET, SO_PEERCRED, &cr, &cr_size) < 0) {
         close(s);
-        ERROR("Unable to recieve socket options\n");
+        ERROR("Unable to receive socket options\n");
         return;
     }
 
     r = TEMP_FAILURE_RETRY(recv(s, &msg, sizeof(msg), 0));
     if(r != sizeof(prop_msg)) {
-        ERROR("sys_prop: mis-match msg size recieved: %d expected: %d errno: %d\n",
+        ERROR("sys_prop: mis-match msg size received: %d expected: %d errno: %d\n",
               r, sizeof(prop_msg), errno);
         close(s);
         return;
@@ -549,12 +610,14 @@ static void load_properties_from_file(const char *fn)
 static void load_persistent_properties()
 {
     DIR* dir = opendir(PERSISTENT_PROPERTY_DIR);
+    int dir_fd;
     struct dirent*  entry;
-    char path[PATH_MAX];
     char value[PROP_VALUE_MAX];
     int fd, length;
+    struct stat sb;
 
     if (dir) {
+        dir_fd = dirfd(dir);
         while ((entry = readdir(dir)) != NULL) {
             if (strncmp("persist.", entry->d_name, strlen("persist.")))
                 continue;
@@ -563,20 +626,39 @@ static void load_persistent_properties()
                 continue;
 #endif
             /* open the file and read the property value */
-            snprintf(path, sizeof(path), "%s/%s", PERSISTENT_PROPERTY_DIR, entry->d_name);
-            fd = open(path, O_RDONLY);
-            if (fd >= 0) {
-                length = read(fd, value, sizeof(value) - 1);
-                if (length >= 0) {
-                    value[length] = 0;
-                    property_set(entry->d_name, value);
-                } else {
-                    ERROR("Unable to read persistent property file %s errno: %d\n", path, errno);
-                }
-                close(fd);
-            } else {
-                ERROR("Unable to open persistent property file %s errno: %d\n", path, errno);
+            fd = openat(dir_fd, entry->d_name, O_RDONLY | O_NOFOLLOW);
+            if (fd < 0) {
+                ERROR("Unable to open persistent property file \"%s\" errno: %d\n",
+                      entry->d_name, errno);
+                continue;
             }
+            if (fstat(fd, &sb) < 0) {
+                ERROR("fstat on property file \"%s\" failed errno: %d\n", entry->d_name, errno);
+                close(fd);
+                continue;
+            }
+
+            // File must not be accessible to others, be owned by root/root, and
+            // not be a hard link to any other file.
+            if (((sb.st_mode & (S_IRWXG | S_IRWXO)) != 0)
+                    || (sb.st_uid != 0)
+                    || (sb.st_gid != 0)
+                    || (sb.st_nlink != 1)) {
+                ERROR("skipping insecure property file %s (uid=%lu gid=%lu nlink=%d mode=%o)\n",
+                      entry->d_name, sb.st_uid, sb.st_gid, sb.st_nlink, sb.st_mode);
+                close(fd);
+                continue;
+            }
+
+            length = read(fd, value, sizeof(value) - 1);
+            if (length >= 0) {
+                value[length] = 0;
+                property_set(entry->d_name, value);
+            } else {
+                ERROR("Unable to read persistent property file %s errno: %d\n",
+                      entry->d_name, errno);
+            }
+            close(fd);
         }
         closedir(dir);
     } else {
@@ -623,6 +705,74 @@ void load_persist_props(void)
     load_persistent_properties();
 }
 
+/* BEGIN Motorola, Darren Shu - w36016, July 31,2012, IKSECURITY-199 */
+/* This provides backwards compatibility with for the read only services
+   which were once used by the applications using the access token feature. */
+void update_legacy_atvc_properties(void)
+{
+    char *atvc_property_value;
+    atvc_property_value = property_get("persist.atvc.simswap");
+
+    if (atvc_property_value != NULL)    {
+        property_set("ro.sys.atvc_allow_simswap", atvc_property_value);
+    }
+    else    {
+        property_set("ro.sys.atvc_allow_simswap", "0");
+        property_set("ro.sys.atvc_efem", "0");
+    }
+    atvc_property_value = property_get("persist.atvc.log");
+    if (atvc_property_value != NULL)    {
+        property_set("ro.sys.atvc_allow_bp_log", atvc_property_value);
+        property_set("ro.sys.atvc_allow_ap_mot_log", atvc_property_value);
+        property_set("ro.sys.atvc_allow_gki_log", atvc_property_value);
+    }
+    else    {
+        property_set("ro.sys.atvc_allow_bp_log", "0");
+        property_set("ro.sys.atvc_allow_ap_mot_log", "0");
+        property_set("ro.sys.atvc_allow_gki_log", "0");
+    }
+
+    atvc_property_value = property_get("persist.atvc.netmon_usb");
+    if (atvc_property_value != NULL)    {
+        property_set("ro.sys.atvc_allow_netmon_usb", atvc_property_value);
+    }
+    else    {
+        property_set("ro.sys.atvc_allow_netmon_usb", "0");
+    }
+
+    atvc_property_value = property_get("persist.atvc.netmon_ih");
+    if (atvc_property_value != NULL)    {
+        property_set("ro.sys.atvc_allow_netmon_ih", atvc_property_value);
+    }
+    else    {
+        property_set("ro.sys.atvc_allow_netmon_ih", "0");
+    }
+
+    atvc_property_value = property_get("persist.atvc.allow_res_core");
+    if (atvc_property_value != NULL)    {
+        property_set("ro.sys.atvc_allow_res_core", atvc_property_value);
+    }
+    else    {
+        property_set("ro.sys.atvc_allow_res_core", "0");
+    }
+
+    atvc_property_value = property_get("persist.atvc.allow_res_panic");
+    if (atvc_property_value != NULL)    {
+        property_set("ro.sys.atvc_allow_res_panic", atvc_property_value);
+    }
+    else    {
+        property_set("ro.sys.atvc_allow_res_panic", "0");
+    }
+    atvc_property_value = property_get("persist.atvc.allow_all_core");
+    if (atvc_property_value != NULL)    {
+        property_set("ro.sys.atvc_allow_all_core", atvc_property_value);
+    }
+    else    {
+        property_set("ro.sys.atvc_allow_all_core", "0");
+    }
+}
+/* END IKSECURITY-199 */
+
 void start_property_service(void)
 {
     int fd;
@@ -632,6 +782,8 @@ void start_property_service(void)
     load_override_properties();
     /* Read persistent properties after all default values have been loaded. */
     load_persistent_properties();
+
+    update_legacy_atvc_properties();
 
     fd = create_socket(PROP_SERVICE_NAME, SOCK_STREAM, 0666, 0, 0, NULL);
     if(fd < 0) return;

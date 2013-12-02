@@ -308,6 +308,14 @@ void service_start(struct service *svc, const char *dynamic_args)
             }
         }
 
+        if (svc->allowrtprio == 1) {
+            struct rlimit limit;
+
+            limit.rlim_cur = 1;
+            limit.rlim_max = 1;
+            setrlimit(RLIMIT_RTPRIO, &limit);
+        }
+
         if (needs_console) {
             setsid();
             open_console();
@@ -399,7 +407,7 @@ void service_start(struct service *svc, const char *dynamic_args)
 }
 
 /* The how field should be either SVC_DISABLED or SVC_RESET */
-static void service_stop_or_reset(struct service *svc, int how)
+static void service_stop_or_reset(struct service *svc, int how,int signal)
 {
         /* we are no longer running, nor should we
          * attempt to restart
@@ -420,8 +428,8 @@ static void service_stop_or_reset(struct service *svc, int how)
     }
 
     if (svc->pid) {
-        NOTICE("service '%s' is being killed\n", svc->name);
-        kill(-svc->pid, SIGKILL);
+        NOTICE("service '%s' is being killed with the signal %d\n", svc->name,signal);
+        kill(-svc->pid, signal);
         notify_service_state(svc->name, "stopping");
     } else {
         notify_service_state(svc->name, "stopped");
@@ -430,12 +438,17 @@ static void service_stop_or_reset(struct service *svc, int how)
 
 void service_reset(struct service *svc)
 {
-    service_stop_or_reset(svc, SVC_RESET);
+    service_stop_or_reset(svc, SVC_RESET,SIGKILL);
 }
 
 void service_stop(struct service *svc)
 {
-    service_stop_or_reset(svc, SVC_DISABLED);
+    service_stop_or_reset(svc, SVC_DISABLED,SIGKILL);
+}
+
+void service_term(struct service *svc)
+{
+    service_stop_or_reset(svc, SVC_DISABLED,SIGTERM);
 }
 
 void property_changed(const char *name, const char *value)
@@ -504,6 +517,16 @@ static void msg_stop(const char *name)
     }
 }
 
+static void handle_dev_add_msg(const char *name)
+{
+    queue_device_added_removed_triggers(name, true);
+}
+
+static void handle_dev_rem_msg(const char *name)
+{
+    queue_device_added_removed_triggers(name, false);
+}
+
 void handle_control_message(const char *msg, const char *arg)
 {
     if (!strcmp(msg,"start")) {
@@ -513,9 +536,48 @@ void handle_control_message(const char *msg, const char *arg)
     } else if (!strcmp(msg,"restart")) {
         msg_stop(arg);
         msg_start(arg);
+    } else if (!strcmp(msg,"dev_added")) {
+        handle_dev_add_msg(arg);
+    } else if (!strcmp(msg,"dev_removed")) {
+       handle_dev_rem_msg(arg);
     } else {
         ERROR("unknown control msg '%s'\n", msg);
     }
+}
+
+static void get_mot_bootmode()
+{
+    char data[1024], bootreason[32];
+    int fd, n;
+    char *x, *pwrup_rsn;
+
+    memset(bootreason, 0, 32);
+
+    fd = open("/proc/bootinfo", O_RDONLY);
+    if (fd < 0) return 0;
+
+    n = read(fd, data, 1023);
+    close(fd);
+    if (n < 0) return 0;
+
+    data[n] = '\0';
+
+    pwrup_rsn = strstr(data, "POWERUPREASON");
+    if (pwrup_rsn) {
+        x = strstr(pwrup_rsn, ": ");
+        if (x) {
+            x += 2;
+            n = 0;
+            while (*x && !isspace(*x)) {
+                bootreason[n++] = *x;
+                x++;
+                if (n == 31) break;
+            }
+            bootreason[n] = '\0';
+        }
+    }
+    if (!strcmp(bootreason, "0x00000100"))
+        strlcpy(bootmode, "charger", sizeof(bootmode));
 }
 
 static struct command *get_first_command(struct action *act)
@@ -624,6 +686,80 @@ static int console_init_action(int nargs, char **args)
     return 0;
 }
 
+#define INTEL_MFLD_PHONE "0000"
+#define INTEL_MFLD_BB15_SUFFIX '0'
+#define INTEL_MFLD_BB20_SUFFIX '1'
+#define INTEL_MFLD_OR_SUFFIX '2'
+#define INTEL_MFLD_LEX_SUFFIX '4'
+
+static void spid_init (void)
+{
+    int fd_plat = open("/sys/spid/platform_family_id", O_RDONLY);
+    int fd_prod = open("/sys/spid/product_line_id", O_RDONLY);
+    char buf_plat[PROP_VALUE_MAX]={'\0'};
+    char buf_prod[PROP_VALUE_MAX]={'\0'};
+    char rxdiv_prop_value[PROP_VALUE_MAX]={'\0'};
+    char spid_prod=0;
+
+
+    if ((fd_plat >= 0) && (fd_prod >= 0)) {
+        int n_plat = read(fd_plat, buf_plat, PROP_VALUE_MAX-1);
+        int n_prod = read(fd_prod, buf_prod, PROP_VALUE_MAX-1);
+        close(fd_plat);
+        close(fd_prod);
+        if ((n_plat <= 0) || (n_prod <= 0)) {
+            ERROR("fail to read files in /sys/spid/!\n");
+            return;
+        }
+
+    } else {
+        ERROR("fail to open files in /sys/spid/!\n");
+        return;
+    }
+
+    if (buf_plat[0] == '\0') {
+        ERROR("no spid value in /sys/spid/platform_family_id!\n");
+    }
+    if (buf_prod[0] == '\0') {
+        ERROR("no spid value in /sys/spid/product_line_id!\n");
+    }
+
+    rxdiv_prop_value[0]='0';
+
+    /* True for all INTEL_MFLD_PHONE devices */
+    if (strncmp(buf_plat, INTEL_MFLD_PHONE, 4) == 0) {
+        spid_prod = buf_prod[3];
+
+        /* True on the following devices :
+         * - INTEL_MFLD_BB_15_PRO
+         * - INTEL_MFLD_BB_15_ENG
+         * - INTEL_MFLD_BB_20_ENG
+         * - INTEL_MFLD_BB_20_PRO
+         */
+        if (spid_prod == INTEL_MFLD_BB15_SUFFIX || spid_prod == INTEL_MFLD_BB20_SUFFIX) {
+            property_set("audiocomms.vp.fw_name", "vpimg_es305b-BB.bin");
+            rxdiv_prop_value[0]='1';
+        }
+
+        /* True on the following devices :
+        * - INTEL_MFLD_LEX_PRO
+        * - INTEL_MFLD_LEX_ENG
+        */
+        if (spid_prod == INTEL_MFLD_LEX_SUFFIX)
+            rxdiv_prop_value[0]='1';
+
+        /* True on the following devices :
+         * - INTEL_MFLD_OR_PRO
+         * - INTEL_MFLD_OR_ENG
+         */
+        if (spid_prod == INTEL_MFLD_OR_SUFFIX)
+            property_set("audiocomms.vp.fw_name", "vpimg_es305b-NH.bin");
+    }
+    // DO NOT SET this property as it is going to overwrite the 
+    // Diversity value that is being configured by flex on the MODEM.
+    //property_set("ro.spid.telephony.rxdiv", rxdiv_prop_value);
+}
+
 static void import_kernel_nv(char *name, int for_emulator)
 {
     char *value = strchr(name, '=');
@@ -675,6 +811,34 @@ static void import_kernel_nv(char *name, int for_emulator)
     }
 }
 
+static void boardid_init (void)
+{
+    int fd = open("/proc/boardid", O_RDONLY);
+    char buf[PROP_VALUE_MAX]={'\0'};
+    char bid[PROP_VALUE_MAX]={'\0'};
+
+    if (fd >= 0) {
+        int n=read(fd, buf, PROP_VALUE_MAX-1);
+        close(fd);
+
+        if (n <= 0){
+            ERROR("fail to read /proc/boardid!\n");
+            return;
+        }
+    } else {
+        ERROR("fail to open /proc/boardid!\n");
+        return;
+    }
+
+    sscanf(buf, "boardid=%91s", bid);
+
+    if (bid[0] == '\0') {
+        ERROR("no bid value in /proc/boardid!\n");
+    }
+
+    property_set("ro.board.id", bid);
+}
+
 static void export_kernel_boot_props(void)
 {
     char tmp[PROP_VALUE_MAX];
@@ -685,14 +849,26 @@ static void export_kernel_boot_props(void)
         const char *dest_prop;
         const char *def_val;
     } prop_map[] = {
-        { "ro.boot.serialno", "ro.serialno", "", },
-        { "ro.boot.mode", "ro.bootmode", "unknown", },
         { "ro.boot.baseband", "ro.baseband", "unknown", },
         { "ro.boot.bootloader", "ro.bootloader", "unknown", },
+        { "ro.boot.carrier", "ro.carrier", "unknown", }, /* IKMAINJB-171 */
+        { "ro.boot.msn", "ro.msn", NULL, }, /* IKMAINJB-3652 */
+        { "ro.boot.bootset", "ro.bootset", NULL, }, /* IKMAINJB-3652 */
+        { "ro.boot.usbmode", "ro.usb_mode", "normal", }, /* IKMAINJB-171 */
+        { "ro.boot.serialno", "ro.serialno", NULL, }, /* IKMAINJB-3652 */
     };
 
     for (i = 0; i < ARRAY_SIZE(prop_map); i++) {
         pval = property_get(prop_map[i].src_prop);
+
+        /* BEGIN IKMAINJB-3652, 10/15/2012, Yi-wei, don't set "ro.prop" */
+        /* if pval is NULL and def_val is NULL,  don't set the read-only
+         * property. It will give opportunity to other apps to set it later.
+         */
+        if (!pval && !prop_map[i].def_val)
+           continue;
+        /* END IKMAINJB-3652, 10/15/2012, Yi-wei, don't set "ro.prop"*/
+
         property_set(prop_map[i].dest_prop, pval ?: prop_map[i].def_val);
     }
 
@@ -700,8 +876,18 @@ static void export_kernel_boot_props(void)
     if (pval)
         strlcpy(console, pval, sizeof(console));
 
-    /* save a copy for init's usage during boot */
-    strlcpy(bootmode, property_get("ro.bootmode"), sizeof(bootmode));
+    /* BEGIN IKMAINJB-171, 9/12/2012, jcarlyle, bootmode the Motorola way */
+    get_mot_bootmode();
+    /* if get_mot_bootmode sets bootmode, use that instead of the cmd line */
+    if (*bootmode)
+        property_set("ro.bootmode", bootmode);
+    else {
+        pval = property_get("ro.boot.mode");
+        property_set("ro.bootmode", pval);
+        /* save a copy for init's usage during boot */
+        strlcpy(bootmode, pval, sizeof(bootmode));
+    }
+    /* END IKMAINJB-171, 9/12/2012, jcarlyle, bootmode the Motorola way */
 
     /* if this was given on kernel command line, override what we read
      * before (e.g. from /proc/cpuinfo), if anything */
@@ -716,12 +902,9 @@ static void export_kernel_boot_props(void)
     property_set("ro.boot.emmc", emmc_boot ? "1" : "0");
 
     /* TODO: these are obsolete. We should delete them */
-    if (!strcmp(bootmode,"factory"))
-        property_set("ro.factorytest", "1");
-    else if (!strcmp(bootmode,"factory2"))
-        property_set("ro.factorytest", "2");
-    else
-        property_set("ro.factorytest", "0");
+    property_set("ro.factorytest", "0");
+
+    boardid_init();
 }
 
 static void process_kernel_cmdline(void)
@@ -736,6 +919,7 @@ static void process_kernel_cmdline(void)
     import_kernel_cmdline(0, import_kernel_nv);
     if (qemu[0])
         import_kernel_cmdline(1, import_kernel_nv);
+    spid_init();
 
     /* now propogate the info given on command line to internal variables
      * used by init as well as the current required properties
@@ -753,6 +937,19 @@ static int property_service_init_action(int nargs, char **args)
     start_property_service();
     return 0;
 }
+
+static int personality_init_action(int nargs, char **args)
+{
+    const char *pval;
+    pval = property_get("ro.config.personality");
+    if (pval && !strcmp(pval, "compat_layout")) {
+        int old_personality;
+        old_personality = personality((unsigned long)-1);
+        personality(old_personality | ADDR_COMPAT_LAYOUT);
+    }
+    return 0;
+}
+
 
 static int signal_init_action(int nargs, char **args)
 {
@@ -780,6 +977,12 @@ static int queue_property_triggers_action(int nargs, char **args)
     queue_all_property_triggers();
     /* enable property triggers */
     property_triggers_enabled = 1;
+    return 0;
+}
+
+static int queue_device_triggers_action(int nargs, char **args)
+{
+    queue_all_device_triggers();
     return 0;
 }
 
@@ -1012,6 +1215,7 @@ int main(int argc, char **argv)
     }
 
     queue_builtin_action(property_service_init_action, "property_service_init");
+    queue_builtin_action(personality_init_action, "personality_init");
     queue_builtin_action(signal_init_action, "signal_init");
     queue_builtin_action(check_startup_action, "check_startup");
 
@@ -1029,6 +1233,10 @@ int main(int argc, char **argv)
 
         /* run all property triggers based on current state of the properties */
     queue_builtin_action(queue_property_triggers_action, "queue_property_triggers");
+
+    /* run all device triggers based on current state of device nodes in /dev */
+    queue_builtin_action(queue_device_triggers_action, "queue_device_triggers");
+
 
 
 #if BOOTCHART

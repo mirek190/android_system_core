@@ -74,9 +74,7 @@ struct svcenvinfo {
                                  so it can be restarted with its class */
 #define SVC_RC_DISABLED 0x80  /* Remember if the disabled flag was set in the rc script */
 
-#ifndef NR_SVC_SUPP_GIDS
-#define NR_SVC_SUPP_GIDS 12    /* twelve supplementary groups */
-#endif
+#define NR_SVC_SUPP_GIDS 26    /* number of supplementary groups */
 
 #define COMMAND_RETRY_TIMEOUT 5
 
@@ -115,6 +113,8 @@ struct service {
     int ioprio_class;
     int ioprio_pri;
 
+    int allowrtprio;
+
     int nargs;
     /* "MUST BE AT THE END OF THE STRUCT" */
     char *args[1];
@@ -131,6 +131,7 @@ void service_for_each_class(const char *classname,
 void service_for_each_flags(unsigned matchflags,
                             void (*func)(struct service *svc));
 void service_stop(struct service *svc);
+void service_term(struct service *svc);
 void service_reset(struct service *svc);
 void service_start(struct service *svc, const char *dynamic_args);
 void property_changed(const char *name, const char *value);

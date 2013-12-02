@@ -62,6 +62,7 @@
 #define AID_DRMRPC        1026  /* group for drm rpc */
 #define AID_NFC           1027  /* nfc subsystem */
 #define AID_SDCARD_R      1028  /* external storage read access */
+#define AID_SMARTCARD     1029  /* smart card subsystem */
 #define AID_AUDIT         1031  /* audit daemon */
 
 #define AID_THEMEMAN      1300  /* theme manager */
@@ -82,8 +83,8 @@
 #define AID_NET_BT_STACK  3008  /* bluetooth: access config files */
 #define AID_QCOM_ONCRPC   3009  /* can read/write /dev/oncrpc files */
 #define AID_QCOM_DIAG     3010  /* can read/write /dev/diag */
+#define AID_SEP_GROUP     3700  /* This is for the security processor */
 
-#if defined(MOTOROLA_UIDS)
 #define AID_MOT_OSH       5000  /* OSH */
 #define AID_MOT_ACCY      9000  /* access to accessory */
 #define AID_MOT_PWRIC     9001  /* power IC */
@@ -96,8 +97,9 @@
 #define AID_MOT_SECCLKD   9008  /* mot_secclkd */
 #define AID_MOT_WHISPER   9009  /* Whisper Protocol access */
 #define AID_MOT_CAIF      9010  /* can create CAIF sockets */
-#define AID_MOT_DLNA      9011  /* DLNA native */
-#endif // MOTOROLA_UIDS
+#define AID_MOT_DLNA      9011  /*DLNA native */
+#define AID_MOT_IRPORT    9012  /* IRRC devices */
+#define AID_MOT_ATVC      9013  /* mot_atvc - This is for use of the ATVC service ONLY */
 
 #define AID_MISC          9998  /* access to misc storage */
 #define AID_NOBODY        9999
@@ -150,6 +152,7 @@ static const struct android_id_info android_ids[] = {
     { "media_rw",  AID_MEDIA_RW, },
     { "vpn",       AID_VPN, },
     { "keystore",  AID_KEYSTORE, },
+    { "smartcard", AID_SMARTCARD, },
     { "usb",       AID_USB, },
     { "mtp",       AID_MTP, },
     { "gps",       AID_GPS, },
@@ -160,22 +163,23 @@ static const struct android_id_info android_ids[] = {
     { "net_bw_acct", AID_NET_BW_ACCT, },
     { "qcom_oncrpc", AID_QCOM_ONCRPC, },
     { "qcom_diag", AID_QCOM_DIAG, },
-#if defined(MOTOROLA_UIDS)
     { "mot_osh",   AID_MOT_OSH, },
     { "mot_accy",  AID_MOT_ACCY, },
     { "mot_pwric", AID_MOT_PWRIC, },
     { "mot_usb",   AID_MOT_USB, },
     { "mot_drm",   AID_MOT_DRM, },
     { "mot_tcmd",  AID_MOT_TCMD, },
-    { "mot_sec_rtc",   AID_MOT_SEC_RTC, },
+    { "mot_atvc",  AID_MOT_ATVC, },
+    { "mot_sec_rtc",  AID_MOT_SEC_RTC, },
     { "mot_tombstone", AID_MOT_TOMBSTONE, },
-    { "mot_tpapi",     AID_MOT_TPAPI, },
-    { "mot_secclkd",   AID_MOT_SECCLKD, },
-    { "mot_whisper",   AID_MOT_WHISPER, },
-    { "mot_caif",  AID_MOT_CAIF, },
-    { "mot_dlna",  AID_MOT_DLNA, },
-#endif
+    { "mot_tpapi",  AID_MOT_TPAPI, },
+    { "mot_secclkd",  AID_MOT_SECCLKD, },
+    { "mot_whisper",  AID_MOT_WHISPER, },
+    { "mot_caif",     AID_MOT_CAIF, },
+    { "mot_dlna",     AID_MOT_DLNA,},
+    { "mot_irport", AID_MOT_IRPORT, },
     { "misc",      AID_MISC, },
+    { "security",  AID_SEP_GROUP },
     { "nobody",    AID_NOBODY, },
     { "theme_man", AID_THEMEMAN },
     { "audit",      AID_AUDIT, },
@@ -209,6 +213,13 @@ static struct fs_path_config android_dirs[] = {
     { 00770, AID_DHCP,   AID_DHCP,   "data/misc/dhcp" },
     { 00775, AID_MEDIA_RW, AID_MEDIA_RW, "data/media" },
     { 00775, AID_MEDIA_RW, AID_MEDIA_RW, "data/media/Music" },
+    { 00777, AID_SYSTEM, AID_SYSTEM, "data/anr" },
+    { 00771, AID_MOT_TCMD,  AID_SHELL,  "data/local/12m/batch" },
+    { 00771, AID_MOT_TCMD,  AID_SHELL,  "data/local/12m" },
+    { 00771, AID_MOT_TCMD,  AID_SHELL,  "data/local/tmp" },
+    { 00775, AID_SYSTEM, AID_SYSTEM, "data/tombstones" },
+    { 00777, AID_SYSTEM, AID_SYSTEM, "data/touchpad" },
+    { 00770, AID_RADIO,  AID_LOG,    "data/logger" },
     { 00771, AID_SYSTEM, AID_SYSTEM, "data" },
     { 00750, AID_ROOT,   AID_SHELL,  "sbin" },
     { 00755, AID_ROOT,   AID_ROOT,   "system/addon.d" },
@@ -216,6 +227,13 @@ static struct fs_path_config android_dirs[] = {
     { 00755, AID_ROOT,   AID_SHELL,  "system/vendor" },
     { 00755, AID_ROOT,   AID_SHELL,  "system/xbin" },
     { 00755, AID_ROOT,   AID_ROOT,   "system/etc/ppp" },
+    /* the following two directory paths are INTENTIONALLY added
+       to ensure parent folder and sub-folders get different permissions.
+    */
+    { 00755, AID_ROOT,   AID_SYSTEM, "system/multiconfig/ap/" },
+    { 00750, AID_ROOT,   AID_SYSTEM, "system/multiconfig/ap" },
+    { 00755, AID_ROOT,   AID_ROOT,   "system/usr/bin" },
+    { 00775, AID_ROOT,   AID_ROOT,   "system/etc/touchpad" },
     { 00777, AID_ROOT,   AID_ROOT,   "sdcard" },
     { 00755, AID_ROOT,   AID_ROOT,   0 },
 };
@@ -234,14 +252,25 @@ static struct fs_path_config android_files[] = {
     { 00550, AID_ROOT,      AID_SHELL,     "system/etc/init.testmenu" },
     { 00550, AID_DHCP,      AID_SHELL,     "system/etc/dhcpcd/dhcpcd-run-hooks" },
     { 00440, AID_BLUETOOTH, AID_BLUETOOTH, "system/etc/dbus.conf" },
-    { 00444, AID_RADIO,     AID_AUDIO,     "system/etc/AudioPara4.csv" },
+    { 00440, AID_BLUETOOTH, AID_BLUETOOTH, "system/etc/bluetooth/main.conf" },
+    { 00440, AID_BLUETOOTH, AID_BLUETOOTH, "system/etc/bluetooth/input.conf" },
+    { 00440, AID_BLUETOOTH, AID_BLUETOOTH, "system/etc/bluetooth/audio.conf" },
+    { 00440, AID_BLUETOOTH, AID_BLUETOOTH, "system/etc/bluetooth/network.conf" },
+    { 00444, AID_NET_BT,    AID_NET_BT,    "system/etc/bluetooth/blacklist.conf" },
+    { 00640, AID_SYSTEM,    AID_SYSTEM,    "system/etc/bluetooth/auto_pairing.conf" },
+    { 00440, AID_RADIO,     AID_AUDIO,     "system/etc/AudioPara4.csv" },
     { 00555, AID_ROOT,      AID_ROOT,      "system/etc/ppp/*" },
     { 00555, AID_ROOT,      AID_ROOT,      "system/etc/rc.*" },
+    { 00755, AID_ROOT,      AID_SHELL,     "system/etc/12m_files_copy.sh" },
+    { 00544, AID_ROOT,      AID_SHELL,     "system/etc/install-recovery.sh" },
+    { 00750, AID_ROOT,      AID_ROOT,      "xbin/qe" },
     { 00755, AID_ROOT,      AID_ROOT,      "system/addon.d/*" },
     { 00644, AID_SYSTEM,    AID_SYSTEM,    "data/app/*" },
     { 00644, AID_MEDIA_RW,  AID_MEDIA_RW,  "data/media/*" },
     { 00644, AID_SYSTEM,    AID_SYSTEM,    "data/app-private/*" },
     { 00644, AID_APP,       AID_APP,       "data/data/*" },
+    { 00660, AID_RADIO,     AID_RADIO,     "data/logger/bplogd.clog" },
+    { 00660, AID_RADIO,     AID_RADIO,     "data/logger/bplogd.conf" },
         /* the following two files are INTENTIONALLY set-gid and not set-uid.
          * Do not change. */
     { 02755, AID_ROOT,      AID_NET_RAW,   "system/bin/ping" },
@@ -254,14 +283,20 @@ static struct fs_path_config android_files[] = {
     { 06755, AID_ROOT,      AID_ROOT,      "system/xbin/procmem" },
     { 06755, AID_ROOT,      AID_ROOT,      "system/xbin/tcpdump" },
     { 04770, AID_ROOT,      AID_RADIO,     "system/bin/pppd-ril" },
+    { 04770, AID_ROOT,      AID_RADIO,     "system/bin/pppd-moto_ril" },
 		/* the following file is INTENTIONALLY set-uid, and IS included
 		 * in user builds. */
     { 06750, AID_ROOT,      AID_SHELL,     "system/bin/run-as" },
     { 06750, AID_ROOT,      AID_SYSTEM,    "system/bin/rebootcmd" },
     { 00755, AID_ROOT,      AID_SHELL,     "system/bin/*" },
+    { 00750, AID_ROOT,      AID_RADIO,     "system/bin/mfa" }, /* STE */
+    { 00755, AID_ROOT,      AID_SHELL,     "system/usr/bin/*" },
+    { 00555, AID_ROOT,      AID_SHELL,     "system/bin/fwupgrade" },
+    { 00555, AID_ROOT,      AID_ROOT,      "system/usr/bin/brcm_guci_drv" },
     { 00755, AID_ROOT,      AID_ROOT,      "system/lib/valgrind/*" },
     { 00755, AID_ROOT,      AID_SHELL,     "system/xbin/*" },
     { 00755, AID_ROOT,      AID_SHELL,     "system/vendor/bin/*" },
+    { 00755, AID_ROOT,      AID_SHELL,     "vendor/bin/*" },
     { 00750, AID_ROOT,      AID_SHELL,     "sbin/*" },
     { 00755, AID_ROOT,      AID_ROOT,      "bin/*" },
     { 00750, AID_ROOT,      AID_SHELL,     "init*" },

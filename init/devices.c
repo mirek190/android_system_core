@@ -20,7 +20,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-
+#include <sys/system_properties.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -43,19 +43,31 @@
 
 #include <cutils/list.h>
 #include <cutils/uevent.h>
+#include <cutils/partition_utils.h>
+#include <sys/poll.h>
 
 #include "devices.h"
 #include "util.h"
 #include "log.h"
+#include "fs_redundancy.h"
 
 #define SYSFS_PREFIX    "/sys"
 #define FIRMWARE_DIR1   "/etc/firmware"
 #define FIRMWARE_DIR2   "/vendor/firmware"
 #define FIRMWARE_DIR3   "/firmware/image"
+#define CRDA_BIN_PATH   "/system/bin/crda"
+#define PLATFORM_STR    "platform"
+#define CHANGE_STR      "change"
 
 #ifdef HAVE_SELINUX
 extern struct selabel_handle *sehandle;
 #endif
+
+#define MAX_MMC_PARTITIONS 32
+#define NAME_LEN 32
+#define ALIAS_LEN 32
+#define PATH_LEN 64
+#define BUF_SIZE MAX_MMC_PARTITIONS*128
 
 static int device_fd = -1;
 
@@ -66,10 +78,14 @@ struct uevent {
     const char *firmware;
     const char *partition_name;
     const char *device_name;
+    const char *country;
     int partition_num;
     int major;
     int minor;
 };
+
+static void set_device_perm(char *dev_path, char *dev_link);
+static void get_partition_alias_name(char *devname, char *alias);
 
 struct perms_ {
     char *name;
@@ -317,6 +333,7 @@ static void parse_event(const char *msg, struct uevent *uevent)
     uevent->path = "";
     uevent->subsystem = "";
     uevent->firmware = "";
+    uevent->country = "";
     uevent->major = -1;
     uevent->minor = -1;
     uevent->partition_name = NULL;
@@ -352,6 +369,9 @@ static void parse_event(const char *msg, struct uevent *uevent)
         } else if(!strncmp(msg, "DEVNAME=", 8)) {
             msg += 8;
             uevent->device_name = msg;
+        } else if (!strncmp(msg, "COUNTRY=", 8)) {
+            msg += 8;
+            uevent->country = msg;
         }
 
         /* advance to after the next \0 */
@@ -359,9 +379,10 @@ static void parse_event(const char *msg, struct uevent *uevent)
             ;
     }
 
-    log_event_print("event { '%s', '%s', '%s', '%s', %d, %d }\n",
+    log_event_print("event { '%s', '%s', '%s', '%s', %d, %d, '%s' }\n",
                     uevent->action, uevent->path, uevent->subsystem,
-                    uevent->firmware, uevent->major, uevent->minor);
+                    uevent->firmware, uevent->major, uevent->minor,
+                    uevent->country);
 }
 
 static char **get_v4l_device_symlinks(struct uevent *uevent)
@@ -423,6 +444,11 @@ static char **get_character_device_symlinks(struct uevent *uevent)
         goto err;
 
     if (!strncmp(parent, "/usb", 4)) {
+        if (!strncmp(parent, "/usbhs_omap", 11)) {
+            parent = strstr(parent + 11, "/usb");
+            if (!*parent)
+                goto err;
+        }
         /* skip root hub name and device. use device interface */
         while (*++parent && *parent != '/');
         if (*parent)
@@ -452,7 +478,36 @@ err:
     return NULL;
 }
 
-static char **parse_platform_block_device(struct uevent *uevent)
+static char **parse_moto_block_device_alias(char *devpath)
+{
+    int link_num = 0;
+    char dev_alias[ALIAS_LEN]={'\0'};
+
+    char **links = malloc(sizeof(char *) * 5);
+    if (!links)
+        return NULL;
+    memset(links, 0, sizeof(char *) * 5);
+
+    char *basename = strrchr(devpath, '/') + 1;
+    get_partition_alias_name(basename, dev_alias);
+
+    if (strlen(dev_alias) && strncmp(dev_alias, "(null)", 6)) {
+        /* Make Motorola specific /dev/block/alias links */
+        if (asprintf(&links[link_num], "/dev/block/%s", dev_alias) > 0) {
+            set_device_perm(devpath, links[link_num]);
+            link_num++;
+        } else
+            links[link_num] = NULL;
+    }
+
+    return links;
+
+err:
+    free(links);
+    return NULL;
+}
+
+static char **parse_platform_block_device(struct uevent *uevent, char *devpath)
 {
     const char *device;
     struct platform_node *pdev;
@@ -466,16 +521,17 @@ static char **parse_platform_block_device(struct uevent *uevent)
     char *p;
     unsigned int size;
     struct stat info;
+    char dev_alias[ALIAS_LEN]={'\0'};
 
     pdev = find_platform_device(uevent->path);
     if (!pdev)
         return NULL;
     device = pdev->name;
 
-    char **links = malloc(sizeof(char *) * 4);
+    char **links = malloc(sizeof(char *) * 5);
     if (!links)
         return NULL;
-    memset(links, 0, sizeof(char *) * 4);
+    memset(links, 0, sizeof(char *) * 5);
 
     INFO("found platform device %s\n", device);
 
@@ -484,11 +540,33 @@ static char **parse_platform_block_device(struct uevent *uevent)
     if (uevent->partition_name) {
         p = strdup(uevent->partition_name);
         sanitize(p);
+
+        /*
+         * Check to see if the partition we are handling should be symlinked
+         * to a different alias than the expected.
+         */
+        get_redundant_partition_alias(uevent->action, link_path, devpath, &p);
+
         if (asprintf(&links[link_num], "%s/by-name/%s", link_path, p) > 0)
             link_num++;
         else
             links[link_num] = NULL;
+
+        strncpy(dev_alias, p, ALIAS_LEN - 1);
+
         free(p);
+    } else {
+        char *basename = strrchr(devpath, '/') + 1;
+        get_partition_alias_name(basename, dev_alias);
+    }
+
+    if (strlen(dev_alias)) {
+        /* Make Motorola specific /dev/block/alias links */
+        if (asprintf(&links[link_num], "/dev/block/%s", dev_alias) > 0) {
+            set_device_perm(devpath, links[link_num]);
+            link_num++;
+        } else
+            links[link_num] = NULL;
     }
 
     if (uevent->partition_num >= 0) {
@@ -514,6 +592,7 @@ static void handle_device(const char *action, const char *devpath,
 
     if(!strcmp(action, "add")) {
         make_device(devpath, path, block, major, minor);
+        __system_property_set("ctl.dev_added",devpath);
         if (links) {
             for (i = 0; links[i]; i++)
                 make_link(devpath, links[i]);
@@ -525,6 +604,7 @@ static void handle_device(const char *action, const char *devpath,
             for (i = 0; links[i]; i++)
                 remove_link(devpath, links[i]);
         }
+        __system_property_set("ctl.dev_removed",devpath);
         unlink(devpath);
     }
 
@@ -580,8 +660,12 @@ static void handle_block_device_event(struct uevent *uevent)
     snprintf(devpath, sizeof(devpath), "%s%s", base, name);
     make_dir(base, 0755);
 
-    if (!strncmp(uevent->path, "/devices/", 9))
-        links = parse_platform_block_device(uevent);
+    if (!strncmp(uevent->path, "/devices/platform/", 18))
+        links = parse_platform_block_device(uevent, devpath);
+    else if (strstr(uevent->path, "pci")) {
+        if (strncmp(uevent->path, "pci_bus", 7))
+        links = parse_moto_block_device_alias(devpath);
+    }
 
     handle_device(uevent->action, devpath, uevent->path, 1,
             uevent->major, uevent->minor, links);
@@ -640,9 +724,6 @@ static void handle_generic_device_event(struct uevent *uevent)
      } else if (!strncmp(uevent->subsystem, "graphics", 8)) {
          base = "/dev/graphics/";
          make_dir(base, 0755);
-     } else if (!strncmp(uevent->subsystem, "drm", 3)) {
-         base = "/dev/dri/";
-         make_dir(base, 0755);
      } else if (!strncmp(uevent->subsystem, "oncrpc", 6)) {
          base = "/dev/oncrpc/";
          make_dir(base, 0755);
@@ -661,6 +742,9 @@ static void handle_generic_device_event(struct uevent *uevent)
      } else if(!strncmp(uevent->subsystem, "sound", 5)) {
          base = "/dev/snd/";
          make_dir(base, 0755);
+     } else if(!strncmp(uevent->subsystem, "SMSMdtv", 7)) {
+         base = "/dev/mdtv/";
+         make_dir(base, 0777);
      } else if(!strncmp(uevent->subsystem, "misc", 4) &&
                  !strncmp(name, "log_", 4)) {
          base = "/dev/log/";
@@ -761,49 +845,52 @@ static void process_firmware_event(struct uevent *uevent)
     if (l == -1)
         goto root_free_out;
 
+    /* To handle missing files right away */
     l = asprintf(&data, "%sdata", root);
-    if (l == -1)
+    if (l == -1) {
+        write(loading_fd, "-1", 2); /* abort transfer */
         goto loading_free_out;
+    }
 
     l = asprintf(&file1, FIRMWARE_DIR1"/%s", uevent->firmware);
-    if (l == -1)
+    if (l == -1) {
+        write(loading_fd, "-1", 2); /* abort transfer */
         goto data_free_out;
+    }
 
     l = asprintf(&file2, FIRMWARE_DIR2"/%s", uevent->firmware);
-    if (l == -1)
+    if (l == -1) {
+        write(loading_fd, "-1", 2); /* abort transfer */
         goto data_free_out;
-
-    l = asprintf(&file3, FIRMWARE_DIR3"/%s", uevent->firmware);
-    if (l == -1)
-        goto data_free_out;
+    }
 
     loading_fd = open(loading, O_WRONLY);
     if(loading_fd < 0)
         goto file_free_out;
 
     data_fd = open(data, O_WRONLY);
-    if(data_fd < 0)
+    if(data_fd < 0) {
+        INFO("firmware: Could not open  data file\n");
+        write(loading_fd, "-1", 2); /* abort transfer */
         goto loading_close_out;
+    }
 
 try_loading_again:
     fw_fd = open(file1, O_RDONLY);
     if(fw_fd < 0) {
         fw_fd = open(file2, O_RDONLY);
         if (fw_fd < 0) {
-            fw_fd = open(file3, O_RDONLY);
-            if (fw_fd < 0) {
-                if (booting) {
-                        /* If we're not fully booted, we may be missing
-                         * filesystems needed for firmware, wait and retry.
-                         */
-                    usleep(100000);
-                    booting = is_booting();
-                    goto try_loading_again;
-                }
-                INFO("firmware: could not open '%s' %d\n", uevent->firmware, errno);
-                write(loading_fd, "-1", 2);
-                goto data_close_out;
+            if (booting || (access("/system/etc/firmware", F_OK) != 0)) {
+                    /* If we're not fully booted, we may be missing
+                     * filesystems needed for firmware, wait and retry.
+                     */
+                usleep(100000);
+                booting = is_booting();
+                goto try_loading_again;
             }
+            INFO("firmware: could not open '%s' %d\n", uevent->firmware, errno);
+            write(loading_fd, "-1", 2);
+            goto data_close_out;
         }
     }
 
@@ -826,6 +913,57 @@ loading_free_out:
     free(loading);
 root_free_out:
     free(root);
+}
+
+
+static int handle_crda_event(struct uevent *uevent)
+{
+    int status;
+    int ret;
+    pid_t pid;
+    char country_env[11];
+    char *argv[] = { CRDA_BIN_PATH, NULL };
+    char *envp[] = { country_env  , NULL };
+
+    if(strncmp(uevent->subsystem, PLATFORM_STR, strlen(PLATFORM_STR)))
+       return (-1);
+
+    if(strncmp(uevent->action, CHANGE_STR, strlen(CHANGE_STR)))
+       return (-1);
+
+    INFO("executing CRDA country=%s\n", uevent->country);
+    snprintf(country_env, sizeof(country_env), "COUNTRY=%s", uevent->country);
+
+    switch(pid = fork()) {
+    case -1:
+         /* Error occured */
+         ERROR("handle_crda_event - fork error\n");
+         return (-1);
+         break;
+    case  0:
+         /* Child related processing */
+         if (execve(argv[0], argv, envp) ==  -1) {
+              ERROR("handle_crda_event - execve error\n");
+              return (-1);
+         }
+         break;
+    default:
+         /* Parent related processing */
+         /*
+          * man waitpid: POSIX.1-2001 specifies that if the disposition
+          * of SIGCHLD is set to SIG_IGN, then children that terminate
+          * do not become zombies and a call to waitpid() will block
+          * until all children have terminated, and then fail with errno
+          * set to ECHILD.
+          * With ICS, google has introduced this behavior in "ueventd.c"
+          *          signal(SIGCHLD, SIG_IGN);
+          * So handling of waitpid() return is no more needed.
+          */
+          waitpid (pid, &status,0);
+          break;
+    }
+
+    return 0;
 }
 
 static void handle_firmware_event(struct uevent *uevent)
@@ -864,6 +1002,7 @@ void handle_device_fd()
 
         handle_device_event(&uevent);
         handle_firmware_event(&uevent);
+        handle_crda_event(&uevent);
     }
 }
 
@@ -955,4 +1094,60 @@ void device_init(void)
 int get_device_fd()
 {
     return device_fd;
+}
+
+
+static void set_device_perm(char *dev_path, char *dev_link)
+{
+    unsigned uid = 0;
+    unsigned gid = 0;
+    mode_t mode = 0;
+
+    mode = get_device_perm(dev_link, &uid, &gid);
+
+    if (uid != 0 || gid != 0 || mode != 0600) {
+        chown(dev_path, uid, gid);
+        chmod(dev_path, mode | S_IFBLK);
+    }
+}
+
+static void get_partition_alias_name(char *devname, char *alias)
+{
+    int fd;
+    char buf[BUF_SIZE];
+    char *data_ptr;
+    char *data_end;
+    ssize_t data_size;
+
+    if (!alias)
+        return;
+
+    fd = open("/proc/partitions", O_RDONLY);
+    if (fd < 0)
+        return;
+
+    buf[sizeof(buf) - 1] = '\0';
+    data_size = read(fd, buf, sizeof(buf) - 1);
+    data_ptr = buf;
+    data_end = buf + data_size;
+    *data_end = '\0';
+    while (data_ptr < data_end) {
+        int dev_major, dev_minor;
+        unsigned long long blocks_num;
+        char dev_name[NAME_LEN]={'\0'};
+        char dev_alias[ALIAS_LEN]={'\0'};
+
+        int r = sscanf(data_ptr, "%4d  %7d %10llu %31s%*['\t']%31[^'\n']\n",
+                   &dev_major, &dev_minor, &blocks_num, dev_name, dev_alias);
+
+        if (r == 5 && !strncmp(dev_name, devname, NAME_LEN)) {
+            strncpy(alias, dev_alias, ALIAS_LEN);
+            break;
+        }
+
+        /* Advance cursor to next line */
+        while (data_ptr < data_end && *data_ptr != '\n') data_ptr++;
+        while (data_ptr < data_end && *data_ptr == '\n') data_ptr++;
+    }
+    close(fd);
 }

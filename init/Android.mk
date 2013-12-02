@@ -16,6 +16,7 @@ LOCAL_SRC_FILES:= \
 	init_parser.c \
 	ueventd.c \
 	ueventd_parser.c \
+	fs_redundancy.c \
 	watchdogd.c
 
 ifeq ($(strip $(INIT_BOOTCHART)),true)
