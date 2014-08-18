@@ -123,13 +123,13 @@ static void scanline_clear(context_t* c);
 static void rect_generic(context_t* c, size_t yc);
 static void rect_memcpy(context_t* c, size_t yc);
 
-#if defined( __mips__)
-extern "C" void scanline_t32cb16blend_mips(uint16_t*, uint32_t*, size_t);
-#else
+#if defined( __arm__)
 extern "C" void scanline_t32cb16blend_arm(uint16_t*, uint32_t*, size_t);
 extern "C" void scanline_t32cb16_arm(uint16_t *dst, uint32_t *src, size_t ct);
 extern "C" void scanline_col32cb16blend_neon(uint16_t *dst, uint32_t *col, size_t ct);
 extern "C" void scanline_col32cb16blend_arm(uint16_t *dst, uint32_t col, size_t ct);
+#elif defined(__mips__)
+extern "C" void scanline_t32cb16blend_mips(uint16_t*, uint32_t*, size_t);
 #endif
 
 // ----------------------------------------------------------------------------
@@ -282,8 +282,6 @@ static  const needs_filter_t fill16noblend = {
 
 #if defined(__mips__)
 static CodeCache gCodeCache(32 * 1024);
-#elif defined (__i386__)
-static CodeCache gCodeCache(24 * 1024);
 #else
 static CodeCache gCodeCache(12 * 1024);
 #endif
